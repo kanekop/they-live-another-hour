@@ -4,6 +4,8 @@
 
 仕様の出発点は `SPEC.md`。Another Hour ルールの正本は `../another-hour-clock/spec/another-hour-clock-spec-v2.5.md`。
 
+**本番 URL**: https://kanekop.github.io/they-live-another-hour/ （GitHub Pages・main ブランチ直下から自動配信。push すれば反映）
+
 ## 構成（ビルド不要・外部依存ゼロ）
 
 | ファイル | 役割 |
