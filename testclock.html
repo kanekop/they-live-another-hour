@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Test Clock — Another Hour Lens 検収用</title>
+<style>
+  html, body { height: 100%; margin: 0; }
+  body { background: #0c0e10; display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 24px; font-family: -apple-system, sans-serif; }
+  #clock { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 700;
+    font-size: 18vw; color: #ff4438; letter-spacing: 0.04em; font-variant-numeric: tabular-nums; }
+  #note { color: #556; font-size: 13px; }
+  a { color: #778; }
+</style>
+</head>
+<body>
+<div id="clock">--:--</div>
+<p id="note">
+  Another Hour Lens をかざす検収用の時計。<code>?t=23:30</code> で固定時刻、<code>?t=23:30&run=1</code> でそこから進行、
+  無指定で現在時刻。<code>&s=1</code> で秒表示。
+</p>
+<script>
+'use strict';
+const params = new URLSearchParams(location.search);
+const showSec = params.get('s') === '1';
+const run = params.get('run') === '1';
+const tParam = (params.get('t') || '').match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+const base = tParam
+  ? (+tParam[1] * 3600 + +tParam[2] * 60 + (tParam[3] ? +tParam[3] : 0))
+  : null;
+const start = Date.now();
+const pad2 = n => String(n).padStart(2, '0');
+function render() {
+  let sec;
+  if (base === null) {
+    const d = new Date();
+    sec = d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
+  } else {
+    sec = base + (run ? Math.floor((Date.now() - start) / 1000) : 0);
+    sec %= 86400;
+  }
+  const h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, s = sec % 60;
+  // コロンは実物のデジタル時計らしく点滅させる
+  const on = Math.floor(Date.now() / 800) % 2 === 0;
+  const colon = `<span style="opacity:${on ? 1 : 0}">:</span>`;
+  document.getElementById('clock').innerHTML =
+    `${pad2(h)}${colon}${pad2(m)}` + (showSec ? `${colon}${pad2(s)}` : '');
+  requestAnimationFrame(render);
+}
+render();
+</script>
+</body>
+</html>

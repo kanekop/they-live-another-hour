@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0a0d10">
+<title>Another Hour Lens — They Live Another Hour</title>
+<style>
+  :root {
+    --bg: #0a0d10;
+    --fg: #eaf4f8;
+    --normal-digit: #d9f2ff;
+    --amber: #ffb13d;
+    --panel-bg: rgba(10, 13, 17, 0.96);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+    -webkit-user-select: none; user-select: none; }
+
+  #cam { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
+  #debug-canvas { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; display: none; }
+
+  /* ---- overlay panel (covers the original clock display) ---- */
+  #lens { position: fixed; left: 0; top: 0; pointer-events: none; will-change: transform;
+    opacity: 0; transition: opacity 220ms ease; }
+  #lens.visible { opacity: 1; }
+  #panel { width: 100%; height: 100%; background: var(--panel-bg);
+    border: 1.5px solid rgba(217, 242, 255, 0.28); border-radius: 10px;
+    display: flex; align-items: center; justify-content: center; position: relative;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.45); }
+  #ah-time { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 700;
+    color: var(--normal-digit); letter-spacing: 0.06em; line-height: 1;
+    text-shadow: 0 0 12px rgba(120, 200, 255, 0.35); font-variant-numeric: tabular-nums; }
+  #ah-label { position: absolute; top: 6%; left: 0; right: 0; text-align: center;
+    font-size: 10px; font-weight: 600; letter-spacing: 0.32em; color: var(--amber);
+    display: none; animation: pulse 2.4s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+  /* Another Hour 区間: 琥珀色に転じ、逆行中であることを示す */
+  #lens.ah #panel { border-color: rgba(255, 177, 61, 0.75);
+    box-shadow: 0 0 20px rgba(255, 177, 61, 0.30), 0 4px 24px rgba(0, 0, 0, 0.45); }
+  #lens.ah #ah-time { color: var(--amber); text-shadow: 0 0 14px rgba(255, 177, 61, 0.55); }
+  #lens.ah #ah-label { display: block; }
+
+  /* ---- chrome ---- */
+  header { position: fixed; top: 0; left: 0; right: 0; z-index: 5;
+    padding: calc(env(safe-area-inset-top, 0px) + 10px) 16px 14px;
+    display: flex; justify-content: space-between; align-items: baseline;
+    background: linear-gradient(rgba(10, 13, 16, 0.75), transparent); pointer-events: none; }
+  header h1 { font-size: 15px; font-weight: 600; letter-spacing: 0.04em; }
+  #phase-chip { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 999px;
+    border: 1px solid rgba(234, 244, 248, 0.35); color: rgba(234, 244, 248, 0.85); display: none; }
+  #phase-chip.ah { border-color: var(--amber); color: var(--amber); animation: pulse 2.4s ease-in-out infinite; }
+
+  #hud { position: fixed; left: 0; right: 0; z-index: 5; text-align: center;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 18px); pointer-events: none; }
+  #hud .mapping { display: none; font-family: ui-monospace, Menlo, monospace; font-size: 15px;
+    background: rgba(10, 13, 16, 0.72); border-radius: 999px; padding: 6px 16px;
+    display: inline-block; font-variant-numeric: tabular-nums; }
+  #hud .hint { font-size: 13px; color: rgba(234, 244, 248, 0.75);
+    background: rgba(10, 13, 16, 0.6); border-radius: 999px; padding: 6px 14px; display: inline-block; }
+
+  /* ---- start screen ---- */
+  #start { position: fixed; inset: 0; z-index: 10; background: var(--bg);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 22px; padding: 32px; text-align: center; }
+  #start h2 { font-size: 26px; font-weight: 700; letter-spacing: 0.02em; }
+  #start .sub { font-size: 13px; color: rgba(234, 244, 248, 0.65); max-width: 30em; line-height: 1.8; }
+  #start button { font-size: 17px; font-weight: 600; color: var(--bg); background: var(--fg);
+    border: none; border-radius: 999px; padding: 14px 36px; cursor: pointer; }
+  #start .privacy { font-size: 11px; color: rgba(234, 244, 248, 0.45); }
+  #start .error { color: #ff6b6b; font-size: 13px; display: none; }
+</style>
+</head>
+<body>
+
+<video id="cam" playsinline muted autoplay></video>
+<canvas id="debug-canvas"></canvas>
+
+<div id="lens">
+  <div id="panel">
+    <div id="ah-label">ANOTHER HOUR</div>
+    <div id="ah-time">00:00</div>
+  </div>
+</div>
+
+<header>
+  <h1>Another Hour Lens</h1>
+  <span id="phase-chip"></span>
+</header>
+
+<div id="hud">
+  <span class="mapping" id="hud-mapping"></span>
+  <span class="hint" id="hud-hint">デジタル時計にかざしてください</span>
+</div>
+
+<div id="start">
+  <h2>Another Hour Lens</h2>
+  <p class="sub">カメラをデジタル時計にかざすと、その表示が Another Hour の時刻に置き換わって見えます。実時間 23 時台は、時が 1:00 から 0:00 へ静かに逆行します。</p>
+  <button id="start-btn">カメラを起動する</button>
+  <p class="privacy">映像はすべて端末内で処理され、外部には一切送信されません。</p>
+  <p class="error" id="start-error"></p>
+</div>
+
+<script src="ah-convert.js"></script>
+<script>
+'use strict';
+/* ============================================================
+   Another Hour Lens — Phase 1 (SPEC.md §5)
+   getUserMedia + canvas。検出は 二値化 → 連結成分 → 7セグメント式
+   サンプリング認識。外部依存なし・全処理端末内。
+   URL パラメータ:
+     ?debug=1        検出候補の可視化 + コンソールログ
+     ?test=1&t=HH:MM カメラの代わりに合成7セグ時計ストリームで動作
+     ?ampm=1         12時間表示の AM/PM を端末時刻で補完（既定は表示値をそのまま採用）
+   ============================================================ */
+
+const params = new URLSearchParams(location.search);
+const DEBUG = params.get('debug') === '1';
+const TEST_MODE = params.get('test') === '1';
+const USE_AMPM = params.get('ampm') === '1';
+
+const DET_WIDTH = 360;         // 検出用フレームの幅(px)
+const DET_INTERVAL_MS = 150;   // 検出周期 (~6.7fps 目標)
+const TRACK_TIMEOUT_MS = 1800; // 検出が途切れてからオーバーレイを消すまで
+const PROMOTE_SCORE = 0.78;    // 1回でロックする信頼度
+const PENDING_WINDOW_MS = 900; // 2回一致でロックする時間窓
+
+const els = {
+  video: document.getElementById('cam'),
+  lens: document.getElementById('lens'),
+  panel: document.getElementById('panel'),
+  ahTime: document.getElementById('ah-time'),
+  chip: document.getElementById('phase-chip'),
+  hudMapping: document.getElementById('hud-mapping'),
+  hudHint: document.getElementById('hud-hint'),
+  start: document.getElementById('start'),
+  startBtn: document.getElementById('start-btn'),
+  startError: document.getElementById('start-error'),
+  debugCanvas: document.getElementById('debug-canvas'),
+};
+
+const log = (...a) => { if (DEBUG) console.log('[AHLens]', ...a); };
+
+/* ============================================================
+   7セグメント式の数字認識
+   ============================================================ */
+// segs: A(上) B(右上) C(右下) D(下) E(左下) F(左上) G(中)
+const SEG_PATTERNS = {
+  0: [1,1,1,1,1,1,0], 1: [0,1,1,0,0,0,0], 2: [1,1,0,1,1,0,1],
+  3: [1,1,1,1,0,0,1], 4: [0,1,1,0,0,1,1], 5: [1,0,1,1,0,1,1],
+  6: [1,0,1,1,1,1,1], 7: [1,1,1,0,0,0,0], 8: [1,1,1,1,1,1,1],
+  9: [1,1,1,1,0,1,1],
+};
+// 正規化座標でのサンプル領域 [x0, y0, x1, y1]
+const SEG_ZONES = [
+  [0.30, 0.03, 0.70, 0.16], // A
+  [0.72, 0.18, 0.98, 0.42], // B
+  [0.72, 0.58, 0.98, 0.82], // C
+  [0.30, 0.84, 0.70, 0.97], // D
+  [0.02, 0.58, 0.28, 0.82], // E
+  [0.02, 0.18, 0.28, 0.42], // F
+  [0.30, 0.42, 0.70, 0.58], // G
+];
+const SLANTS = [0, 0.18]; // イタリック気味の7セグ表示に対応するシアー候補
+
+// mask 上の成分 bbox から数字を推定。{digit, conf} を返す。
+function recognizeDigit(mask, w, comp) {
+  const { x0, y0, x1, y1 } = comp;
+  const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+  if (bw / bh < 0.38) {
+    // 細長い成分は「1」（セグメント B, C のみ）
+    return { digit: 1, conf: 0.8 };
+  }
+  let best = { digit: -1, conf: 0 };
+  for (const slant of SLANTS) {
+    // 各ゾーンの点灯率をサンプリング
+    const v = new Array(7);
+    for (let sIdx = 0; sIdx < 7; sIdx++) {
+      const [zx0, zy0, zx1, zy1] = SEG_ZONES[sIdx];
+      let on = 0, total = 0;
+      const py0 = y0 + zy0 * bh, py1 = y0 + zy1 * bh;
+      for (let py = Math.floor(py0); py <= Math.min(y1, Math.ceil(py1)); py++) {
+        const yn = (py - y0) / bh;
+        const shear = slant * (0.5 - yn); // 上をやや右へ
+        const px0 = x0 + (zx0 + shear) * bw, px1 = x0 + (zx1 + shear) * bw;
+        for (let px = Math.floor(px0); px <= Math.min(x1, Math.ceil(px1)); px++) {
+          if (px < x0) continue;
+          total++;
+          if (mask[py * w + px]) on++;
+        }
+      }
+      const frac = total ? on / total : 0;
+      v[sIdx] = Math.min(1, frac / 0.35); // 細いセグメントを補正して 0..1 へ
+    }
+    // 各数字とのソフト一致度
+    let top = 0, second = 0, topDigit = -1;
+    for (let d = 0; d <= 9; d++) {
+      const p = SEG_PATTERNS[d];
+      let s = 0;
+      for (let i = 0; i < 7; i++) s += p[i] ? v[i] : 1 - v[i];
+      s /= 7;
+      if (s > top) { second = top; top = s; topDigit = d; }
+      else if (s > second) { second = s; }
+    }
+    const conf = top * 0.8 + (top - second) * 0.2 + 0.1;
+    if (conf > best.conf) best = { digit: topDigit, conf: Math.min(1, conf) };
+  }
+  return best;
+}
+
+/* ============================================================
+   フレーム処理: 二値化 → 連結成分 → 時刻候補
+   ============================================================ */
+const work = document.createElement('canvas');
+const workCtx = work.getContext('2d', { willReadFrequently: true });
+
+// 7セグ表示はセグメント同士が離れていて1桁が複数成分に割れるため、
+// 1px 膨張で 2px までの隙間を橋渡ししてから連結成分を取る
+function dilate(mask, w, h) {
+  const out = new Uint8Array(mask);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (mask[i]) continue;
+      if ((x > 0 && mask[i - 1]) || (x < w - 1 && mask[i + 1]) ||
+          (y > 0 && mask[i - w]) || (y < h - 1 && mask[i + w])) out[i] = 1;
+    }
+  }
+  return out;
+}
+
+function connectedComponents(mask, w, h) {
+  const label = new Int32Array(w * h).fill(-1);
+  const comps = [];
+  const stack = new Int32Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    if (!mask[i] || label[i] >= 0) continue;
+    const id = comps.length;
+    let sp = 0;
+    stack[sp++] = i;
+    label[i] = id;
+    let x0 = w, y0 = h, x1 = 0, y1 = 0, area = 0;
+    while (sp > 0) {
+      const p = stack[--sp];
+      const px = p % w, py = (p / w) | 0;
+      area++;
+      if (px < x0) x0 = px; if (px > x1) x1 = px;
+      if (py < y0) y0 = py; if (py > y1) y1 = py;
+      // 4近傍
+      if (px > 0 && mask[p - 1] && label[p - 1] < 0) { label[p - 1] = id; stack[sp++] = p - 1; }
+      if (px < w - 1 && mask[p + 1] && label[p + 1] < 0) { label[p + 1] = id; stack[sp++] = p + 1; }
+      if (py > 0 && mask[p - w] && label[p - w] < 0) { label[p - w] = id; stack[sp++] = p - w; }
+      if (py < h - 1 && mask[p + w] && label[p + w] < 0) { label[p + w] = id; stack[sp++] = p + w; }
+    }
+    comps.push({ x0, y0, x1, y1, area, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2,
+                 w: x1 - x0 + 1, h: y1 - y0 + 1 });
+    if (comps.length > 600) break; // ノイズ過多フレームは打ち切り
+  }
+  return comps;
+}
+
+// 1つの極性の mask から時刻候補を探す
+function findTimeCandidates(rawMask, w, h) {
+  // 連結判定はにじみを橋渡しした膨張マスク、数字認識は形の崩れない生マスクで行う
+  const mask = dilate(rawMask, w, h);
+  const comps = connectedComponents(mask, w, h);
+  // 数字らしい成分と、コロン候補になる小さい成分
+  const digitish = [];
+  const smalls = [];
+  for (const c of comps) {
+    if (c.area < 6) continue;
+    if (c.h >= 9 && c.h <= h * 0.75 && c.w / c.h >= 0.08 && c.w / c.h <= 1.15 &&
+        c.area / (c.w * c.h) >= 0.12) {
+      digitish.push(c);
+    } else if (c.area >= 3 && c.h <= h * 0.5) {
+      smalls.push(c); // コロン候補（サイズの妥当性はグループ側で medH と比較して判定）
+    }
+  }
+  digitish.sort((a, b) => a.cx - b.cx);
+
+  // 水平方向に並ぶ数字をグループ化
+  const used = new Array(digitish.length).fill(false);
+  const groups = [];
+  for (let i = 0; i < digitish.length; i++) {
+    if (used[i]) continue;
+    const g = [digitish[i]];
+    used[i] = true;
+    for (let j = i + 1; j < digitish.length; j++) {
+      if (used[j]) continue;
+      const a = g[g.length - 1], b = digitish[j];
+      const hRatio = b.h / a.h;
+      const vOverlap = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
+      const gap = b.x0 - a.x1;
+      if (hRatio > 0.55 && hRatio < 1.8 && vOverlap > 0.45 * Math.min(a.h, b.h) &&
+          gap > -a.w * 0.3 && gap < 2.4 * Math.max(a.h, b.h)) {
+        g.push(b);
+        used[j] = true;
+      }
+    }
+    if (g.length >= 3 && g.length <= 6) groups.push(g);
+  }
+
+  const candidates = [];
+  for (const g of groups) {
+    const medH = g.map(c => c.h).sort((a, b) => a - b)[g.length >> 1];
+    const gy0 = Math.min(...g.map(c => c.y0)), gy1 = Math.max(...g.map(c => c.y1));
+    // グループの縦範囲内にある小成分をコロン候補とし、x位置でまとめる
+    const colonXs = [];
+    for (const s of smalls) {
+      if (s.h >= medH * 0.55) continue;
+      if (s.cy < gy0 - medH * 0.2 || s.cy > gy1 + medH * 0.2) continue;
+      if (s.cx < g[0].x1 || s.cx > g[g.length - 1].x0) continue;
+      const near = colonXs.find(cl => Math.abs(cl.x - s.cx) < medH * 0.35);
+      if (near) near.n++;
+      else colonXs.push({ x: s.cx, n: 1 });
+    }
+    // 数字認識（生マスク）
+    const digits = g.map(c => ({ c, r: recognizeDigit(rawMask, w, c) }));
+    if (digits.some(d => d.r.digit < 0)) continue;
+    // 文字列組み立て: 数字間の隙間にコロンがあれば ':'
+    let str = String(digits[0].r.digit);
+    for (let i = 1; i < digits.length; i++) {
+      const gapX0 = digits[i - 1].c.x1, gapX1 = digits[i].c.x0;
+      if (colonXs.some(cl => cl.x > gapX0 && cl.x < gapX1)) str += ':';
+      str += String(digits[i].r.digit);
+    }
+    const m = str.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (!m) continue;
+    const parsed = { h: +m[1], mnt: +m[2], s: m[3] !== undefined ? +m[3] : null };
+    if (parsed.h > 23 || parsed.mnt > 59 || (parsed.s !== null && parsed.s > 59)) continue;
+
+    const avgConf = digits.reduce((s2, d) => s2 + d.r.conf, 0) / digits.length;
+    const bx0 = g[0].x0, bx1 = g[g.length - 1].x1;
+    const centrality = 1 - Math.min(1, (Math.abs((bx0 + bx1) / 2 - w / 2) / (w / 2) +
+                                        Math.abs((gy0 + gy1) / 2 - h / 2) / (h / 2)) / 2);
+    candidates.push({
+      parsed, str,
+      hasColon: str.includes(':'),
+      bbox: { x0: bx0, y0: gy0, x1: bx1, y1: gy1 },
+      score: avgConf + centrality * 0.08 + Math.min(0.06, medH / h * 0.3),
+      avgConf,
+      comps: g,
+    });
+  }
+  return candidates;
+}
+
+function detectInFrame() {
+  const vw = els.video.videoWidth, vh = els.video.videoHeight;
+  if (!vw || !vh) return null;
+  const k = DET_WIDTH / vw;
+  const w = DET_WIDTH, h = Math.max(1, Math.round(vh * k));
+  work.width = w; work.height = h;
+  workCtx.drawImage(els.video, 0, 0, w, h);
+  const data = workCtx.getImageData(0, 0, w, h).data;
+
+  const gray = new Float32Array(w * h);
+  let sum = 0, sumSq = 0;
+  for (let i = 0, p = 0; i < w * h; i++, p += 4) {
+    const g = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
+    gray[i] = g; sum += g; sumSq += g * g;
+  }
+  const n = w * h;
+  const mean = sum / n;
+  const std = Math.sqrt(Math.max(0, sumSq / n - mean * mean));
+  if (std < 8) return null; // ほぼ一様なフレーム
+
+  const all = [];
+  // 明るい数字(LED/画面) と 暗い数字(LCD/印字) の両極性を試す
+  for (const bright of [true, false]) {
+    const thr = bright ? mean + 0.85 * std : mean - 0.85 * std;
+    const mask = new Uint8Array(n);
+    let onCount = 0;
+    for (let i = 0; i < n; i++) {
+      const on = bright ? gray[i] > thr : gray[i] < thr;
+      if (on) { mask[i] = 1; onCount++; }
+    }
+    if (onCount < 20 || onCount > n * 0.4) continue;
+    for (const c of findTimeCandidates(mask, w, h)) {
+      c.polarity = bright ? 'bright' : 'dark';
+      all.push(c);
+    }
+  }
+  if (!all.length) return null;
+  all.sort((a, b) => b.score - a.score);
+  const best = all[0];
+  best.k = k;
+  return best;
+}
+
+/* ============================================================
+   トラッキングとオーバーレイ
+   ============================================================ */
+let track = null;   // { str, parsed, bboxDet, conv, lastSeen, screen:{x,y,w,h}, hasTarget }
+let pending = null; // { str, t }
+let lastDetTime = 0;
+
+function bboxOverlap(a, b) {
+  const ix = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
+  const iy = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
+  const inter = ix * iy;
+  const areaA = (a.x1 - a.x0) * (a.y1 - a.y0);
+  const areaB = (b.x1 - b.x0) * (b.y1 - b.y0);
+  return inter / Math.max(1, Math.min(areaA, areaB));
+}
+
+function applyConversion(parsed) {
+  let h = parsed.h;
+  if (USE_AMPM) {
+    const now = new Date();
+    h = AHConvert.disambiguateHour(h, parsed.mnt, now.getHours() * 60 + now.getMinutes());
+  }
+  return AHConvert.convert({ h, m: parsed.mnt, s: parsed.s });
+}
+
+function acceptCandidate(cand, now) {
+  const conv = applyConversion(cand.parsed);
+  if (!conv) return;
+  if (track && bboxOverlap(cand.bbox, track.bboxDet) > 0.15) {
+    // 既存ロックの更新（表示時刻の変化=分が進む も受け入れる）
+    Object.assign(track, { str: cand.str, parsed: cand.parsed, bboxDet: cand.bbox, conv, k: cand.k, lastSeen: now });
+    return;
+  }
+  // 新規ロックは 高信頼1回 or 時間窓内2回一致
+  const promote = cand.score >= PROMOTE_SCORE ||
+    (pending && pending.str === cand.str && now - pending.t < PENDING_WINDOW_MS);
+  if (!promote) { pending = { str: cand.str, t: now }; return; }
+  pending = null;
+  track = { str: cand.str, parsed: cand.parsed, bboxDet: cand.bbox, conv, k: cand.k,
+            lastSeen: now, screen: null };
+  log('lock', cand.str, '→', conv.text, `score=${cand.score.toFixed(2)}`);
+}
+
+// 検出キャンバス座標 → 画面(CSS px)。object-fit: cover の切り抜きを補正
+function detToScreenRect(bbox, k) {
+  const vw = els.video.videoWidth, vh = els.video.videoHeight;
+  const r = els.video.getBoundingClientRect();
+  const scale = Math.max(r.width / vw, r.height / vh);
+  const offX = r.left + (r.width - vw * scale) / 2;
+  const offY = r.top + (r.height - vh * scale) / 2;
+  const f = scale / k;
+  return {
+    x: offX + bbox.x0 * f, y: offY + bbox.y0 * f,
+    w: (bbox.x1 - bbox.x0 + 1) * f, h: (bbox.y1 - bbox.y0 + 1) * f,
+  };
+}
+
+function updateOverlay(now) {
+  if (track && now - track.lastSeen > TRACK_TIMEOUT_MS) {
+    log('lost', track.str);
+    track = null;
+  }
+  if (!track) {
+    els.lens.classList.remove('visible');
+    els.chip.style.display = 'none';
+    els.hudMapping.style.display = 'none';
+    els.hudHint.style.display = '';
+    return;
+  }
+  const target = detToScreenRect(track.bboxDet, track.k);
+  // 元表示を確実に覆うよう少し外側へ広げる
+  const padX = target.w * 0.16 + 6, padY = target.h * 0.30 + 6;
+  target.x -= padX; target.y -= padY; target.w += padX * 2; target.h += padY * 2;
+
+  if (!track.screen) track.screen = { ...target };
+  else {
+    const s = track.screen, a = 0.3; // 補間追従
+    s.x += (target.x - s.x) * a; s.y += (target.y - s.y) * a;
+    s.w += (target.w - s.w) * a; s.h += (target.h - s.h) * a;
+  }
+  const s = track.screen;
+  els.lens.style.transform = `translate(${s.x}px, ${s.y}px)`;
+  els.lens.style.width = `${s.w}px`;
+  els.lens.style.height = `${s.h}px`;
+
+  const conv = track.conv;
+  els.ahTime.textContent = conv.text;
+  const fs = Math.min(s.h * (conv.isAH ? 0.52 : 0.62), (s.w * 0.92) / (conv.text.length * 0.62));
+  els.ahTime.style.fontSize = `${fs}px`;
+  document.getElementById('ah-label').style.fontSize = `${Math.max(8, fs * 0.18)}px`;
+
+  els.lens.classList.toggle('ah', conv.isAH);
+  els.lens.classList.add('visible');
+
+  els.chip.textContent = conv.isAH ? 'ANOTHER HOUR ⏪' : `Compressed ×${AHConvert.SCALE_FACTOR.toFixed(3)}`;
+  els.chip.classList.toggle('ah', conv.isAH);
+  els.chip.style.display = 'inline-block';
+  els.hudMapping.textContent = `${track.str} → ${conv.text}`;
+  els.hudMapping.style.display = 'inline-block';
+  els.hudHint.style.display = 'none';
+}
+
+function drawDebug(cand) {
+  const dc = els.debugCanvas;
+  const dpr = window.devicePixelRatio || 1;
+  if (dc.width !== innerWidth * dpr) { dc.width = innerWidth * dpr; dc.height = innerHeight * dpr; }
+  const ctx = dc.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, innerWidth, innerHeight);
+  if (!cand) return;
+  const r = detToScreenRect(cand.bbox, cand.k);
+  ctx.strokeStyle = 'rgba(0,255,140,0.9)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(r.x, r.y, r.w, r.h);
+  ctx.fillStyle = 'rgba(0,255,140,0.9)';
+  ctx.font = '12px monospace';
+  ctx.fillText(`${cand.str} conf=${cand.avgConf.toFixed(2)} ${cand.polarity}`, r.x, r.y - 4);
+}
+
+/* ============================================================
+   メインループ
+   ============================================================ */
+// 検出は setInterval 駆動（rAF はタブ非表示・ウィンドウ遮蔽・iOS の省電力で止まるため）
+function detectionStep() {
+  lastDetTime = performance.now();
+  let cand = null;
+  try { cand = detectInFrame(); } catch (e) { log('detect error', e); }
+  if (cand) {
+    // 初回取得はコロン必須（価格等への誤発火抑制）。既存ロック付近はコロン点滅消灯も許容
+    const nearTrack = track && bboxOverlap(cand.bbox, track.bboxDet) > 0.15;
+    if (cand.hasColon || nearTrack) acceptCandidate(cand, performance.now());
+  }
+  if (DEBUG) drawDebug(cand);
+  updateOverlay(performance.now()); // rAF が止まっている環境でも追従が更新されるように
+}
+
+function loop() {
+  requestAnimationFrame(loop);
+  updateOverlay(performance.now());
+}
+
+/* ============================================================
+   起動: カメラ or 合成テストストリーム
+   ============================================================ */
+async function startCamera() {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+    audio: false,
+  });
+  els.video.srcObject = stream;
+  await els.video.play();
+}
+
+// ?test=1: 7セグ時計を描いた canvas を映像源にする（デスクトップでのE2E検証用）
+function startTestStream() {
+  const tc = document.createElement('canvas');
+  tc.width = 1280; tc.height = 720;
+  const ctx = tc.getContext('2d');
+  const tParam = (params.get('t') || '12:00').match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  const th = tParam ? +tParam[1] : 12, tm = tParam ? +tParam[2] : 0;
+  const ts0 = tParam && tParam[3] !== undefined ? +tParam[3] : null;
+
+  // セグメント同士が接続する太めの字形（実機のにじみで繋がって見える状態を模す）
+  const SEG_RECTS = (x, y, dw, dh, t2) => [
+    [x, y, dw, t2],                                      // A
+    [x + dw - t2, y, t2, dh / 2 + t2 / 2],               // B
+    [x + dw - t2, y + dh / 2 - t2 / 2, t2, dh / 2 + t2 / 2], // C
+    [x, y + dh - t2, dw, t2],                            // D
+    [x, y + dh / 2 - t2 / 2, t2, dh / 2 + t2 / 2],       // E
+    [x, y, t2, dh / 2 + t2 / 2],                         // F
+    [x, y + (dh - t2) / 2, dw, t2],                      // G
+  ];
+  function draw() {
+    ctx.fillStyle = '#14181c';
+    ctx.fillRect(0, 0, tc.width, tc.height);
+    const t = performance.now() / 1000;
+    const cx = tc.width / 2 + Math.sin(t * 0.6) * 30;
+    const cy = tc.height / 2 + Math.cos(t * 0.45) * 18;
+    const dw = 70, dh = 130, gap = 26, thick = 14;
+    const str = `${String(th).padStart(2, '0')}:${String(tm).padStart(2, '0')}` +
+                (ts0 !== null ? ':' + String(ts0).padStart(2, '0') : '');
+    const colonW = 16;
+    const totalW = [...str].reduce((s2, ch) => s2 + (ch === ':' ? colonW : dw) + gap, -gap);
+    let x = cx - totalW / 2;
+    ctx.fillStyle = '#ff4438';
+    const colonOn = Math.floor(t / 0.8) % 2 === 0;
+    for (const ch of str) {
+      if (ch === ':') {
+        if (colonOn) {
+          ctx.beginPath();
+          ctx.arc(x + colonW / 2, cy - dh * 0.18, colonW / 2, 0, Math.PI * 2);
+          ctx.arc(x + colonW / 2, cy + dh * 0.18, colonW / 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        x += colonW + gap;
+      } else {
+        const segsOn = SEG_PATTERNS[+ch];
+        for (let sIdx = 0; sIdx < 7; sIdx++) {
+          if (!segsOn[sIdx]) continue;
+          const [rx, ry, rw2, rh2] = SEG_RECTS(x, cy - dh / 2, dw, dh, thick)[sIdx];
+          ctx.fillRect(rx, ry, rw2, rh2);
+        }
+        x += dw + gap;
+      }
+    }
+  }
+  // rAF はウィンドウ遮蔽で止まるので interval 駆動（コロン点滅を確実に進める）
+  setInterval(draw, 50);
+  draw();
+  els.video.srcObject = tc.captureStream(20);
+  return els.video.play();
+}
+
+els.startBtn.addEventListener('click', async () => {
+  try {
+    if (TEST_MODE) await startTestStream();
+    else await startCamera();
+    els.start.style.display = 'none';
+    if (DEBUG) els.debugCanvas.style.display = 'block';
+    if ('wakeLock' in navigator) navigator.wakeLock.request('screen').catch(() => {});
+    setInterval(detectionStep, DET_INTERVAL_MS);
+    requestAnimationFrame(loop);
+  } catch (e) {
+    els.startError.textContent = TEST_MODE
+      ? `テストストリームの起動に失敗しました: ${e.message}`
+      : 'カメラを起動できませんでした。ブラウザのカメラ許可を確認してください。（HTTPS または localhost でのみ動作します）';
+    els.startError.style.display = 'block';
+    log('start failed', e);
+  }
+});
+</script>
+</body>
+</html>
